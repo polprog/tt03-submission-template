@@ -39,6 +39,16 @@ jobs:
     # fetch the Verilog from Wokwi API
     - name: fetch Verilog and build config
       run: ./tt/tt_tool.py --create-user-config
+    # generate verilog from vhdl
+    - name: generate Verilog from VHDL fileset
+      run: |
+        for k in src/*.vhd; do
+          entity_name=`basename $k`
+          entity_name=${entity_name/.vhd/}
+          verilog_name=${entity_name}.v
+          echo "Entity name $entity_name"
+          echo yosys -qm ghdl -p "ghdl -fsynopsys $k -e $entity_name; write_verilog ${k/.vhd/.v}"
+        done
 
     # build OpenLane
     - name: openlane repo
