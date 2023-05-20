@@ -6,7 +6,96 @@ permissions:
   pages: write
   id-token: write
 jobs:
+  yosys:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore cached Yosys build
+        id: cache-yosys-restore
+        uses: actions/cache/restore@v3
+        with:
+          path: ${{ github.workspace }}/yosys/
+          key: yosys
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install gperf build-essential g++ bison flex libreadline-dev gawk tcl-dev libffi-dev git graphviz xdot pkg-config python2 python3 libboost-system-dev libboost-python-dev libboost-filesystem-dev zlib1g-dev iverilog
+
+      - name: Fetch yosys
+        if: steps.cache-yosys-restore.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/YosysHQ/yosys.git
+
+      - name: Build yosys
+        if: steps.cache-yosys-restore.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          cd yosys
+          echo ${{ github.workspace }}
+          pwd;#exit
+          CC=gcc
+          make config-$CC
+          free -h
+          #make -j${{ env.procs }} CC=$CC CXX=$CC LD=$CC  # OOM killed?
+          make -j2 CC=$CC CXX=$CC LD=$CC
+
+      - name: Save cached Yosys build
+        id: cache-yosys-save
+        uses: actions/cache/save@v3
+        with:
+          path: ${{ github.workspace }}/yosys/
+          key: ${{ steps.cache-yosys-restore.outputs.cache-primary-key }}
+
+      - name: Install yosys
+        id: install-yosys
+        run: |
+          cd yosys
+          sudo make install
+
+      - name: Restore cached Yosys GHDL plugin build
+        id: cache-yosys-restore-ghdl
+        uses: actions/cache/restore@v3
+        with:
+          path: ${{ github.workspace }}/yosys-ghdl/
+          key: yosys-ghdl
+
+
+
+      - name: Fetch yosys GHDL plugin and GHDL
+        if: steps.cache-yosys-restore-ghdl.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/ghdl/ghdl-yosys-plugin.git
+          git clone https://github.com/ghdl/ghdl
+
+      - name: Build GHDL
+        if: steps.cache-yosys-restore-ghdl.outputs.cache-hit != 'true'
+        uses: ghdl/setup-ghdl-ci@nightly
+        with:
+         backend: gcc
+
+      - name: Build yosys GHDL plugin
+        if: steps.cache-yosys-restore-ghdl.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          cd ghdl-yosys-plugin
+          echo ${{ github.workspace }}
+          pwd;
+          CC=gcc
+          make
+          sudo make install
+      - name: Save cached Yosys GHDL plugin build
+        id: cache-yosys-save-ghdl
+        uses: actions/cache/save@v3
+        with:
+          path: ${{ github.workspace }}/yosys-ghdl/
+          key: ${{ steps.cache-yosys-restore-ghdl.outputs.cache-primary-key }}
+
+
   gds:
+    needs: yosys
     env:
         OPENLANE_TAG:           2023.02.14
         OPENLANE_IMAGE_NAME:    efabless/openlane:4cd0986b3ae550cdf7a6d0fba4e0657012f635d8-amd64
@@ -36,19 +125,22 @@ jobs:
         python-version: '3.10'
     - run: pip install -r tt/requirements.txt
 
-    # fetch the Verilog from Wokwi API
-    - name: fetch Verilog and build config
-      run: ./tt/tt_tool.py --create-user-config || true
     # generate verilog from vhdl
     - name: generate Verilog from VHDL fileset
       run: |
+        echo -n "Workdir: "; pwd
         for k in src/*.vhd; do
           entity_name=`basename $k`
           entity_name=${entity_name/.vhd/}
           verilog_name=${entity_name}.v
           echo "Entity name $entity_name"
-          echo yosys -qm ghdl -p "ghdl -fsynopsys $k -e $entity_name; write_verilog ${k/.vhd/.v}"
+          yosys -qm ghdl -p "ghdl -fsynopsys $k -e $entity_name; write_verilog ${k/.vhd/.v}"
         done
+        ls -lah src/
+
+    # fetch the Verilog from Wokwi API
+    - name: fetch Verilog and build config
+      run: ./tt/tt_tool.py --create-user-config || true
 
     # build OpenLane
     - name: openlane repo
